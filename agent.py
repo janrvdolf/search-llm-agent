@@ -10,6 +10,8 @@ import os
 import json
 from typing import Dict, List, Optional, Any
 from datetime import datetime
+import anthropic
+import base64
 
 try:
     # Core LangChain imports
@@ -492,9 +494,207 @@ Question: {input}
             except Exception as e:
                 return f"Error during download: {str(e)}"
 
+        @tool
+        def analyze(input_string: str) -> str:
+            """
+            Analyze file content using Claude 3.5 as an expert analyzer.
+
+            This tool loads a file and uses Claude to analyze its content based on your query.
+            Supports both text files and images (jpg, jpeg, png, gif, bmp, webp, ico, svg).
+
+            Input format: "file_path", "query"
+            - file_path: Path to the file to analyze (required)
+            - query: The analysis question or request (required)
+
+            Examples:
+            - analyze("downloads/data.json", "What patterns do you see in this data?")
+            - analyze("downloads/zebra_photo.jpg", "Describe what you see in this image")
+            - analyze("downloads/chart.png", "What trends does this chart show?")
+
+            Returns: Expert analysis of the file content or image based on your query.
+            """
+            try:
+                # Parse the input string
+                parts = input_string.split('", "')
+                if len(parts) < 2:
+                    # Try alternate parsing for different quote styles
+                    parts = input_string.split('", "')
+                    if len(parts) < 2:
+                        parts = input_string.split('","')
+                        if len(parts) < 2:
+                            parts = input_string.split(",", 1)
+
+                # Clean up the parts
+                file_path = parts[0].strip().strip("\"'")
+                query = parts[1].strip().strip("\"'") if len(parts) > 1 else ""
+
+                if not file_path:
+                    return "Error: File path cannot be empty"
+                if not query:
+                    return "Error: Query cannot be empty"
+
+                # Check if file exists
+                if not os.path.exists(file_path):
+                    # Try looking in downloads directory if not found
+                    downloads_path = os.path.join("downloads", file_path)
+                    if os.path.exists(downloads_path):
+                        file_path = downloads_path
+                    else:
+                        return f"Error: File not found: {file_path}"
+
+                # Check if file is an image
+                image_extensions = {
+                    ".jpg",
+                    ".jpeg",
+                    ".png",
+                    ".gif",
+                    ".bmp",
+                    ".webp",
+                    ".ico",
+                    ".svg",
+                }
+                file_extension = os.path.splitext(file_path)[1].lower()
+                is_image = file_extension in image_extensions
+
+                # Load file content
+                if is_image:
+                    # Read image as binary and encode to base64
+                    with open(file_path, "rb") as f:
+                        image_data = f.read()
+
+                    # Encode to base64
+                    base64_image = base64.b64encode(image_data).decode("utf-8")
+
+                    # Determine media type
+                    media_type_map = {
+                        ".jpg": "image/jpeg",
+                        ".jpeg": "image/jpeg",
+                        ".png": "image/png",
+                        ".gif": "image/gif",
+                        ".bmp": "image/bmp",
+                        ".webp": "image/webp",
+                        ".ico": "image/x-icon",
+                        ".svg": "image/svg+xml",
+                    }
+                    media_type = media_type_map.get(file_extension, "image/jpeg")
+
+                    file_content = None  # We'll handle this differently for images
+                else:
+                    # Handle non-image files as before
+                    try:
+                        with open(file_path, "r", encoding="utf-8") as f:
+                            file_content = f.read()
+                    except UnicodeDecodeError:
+                        # Try binary mode for non-text files
+                        with open(file_path, "rb") as f:
+                            file_content = f"[Binary file: {file_path}]\nSize: {os.path.getsize(file_path)} bytes"
+
+                    # Truncate content if too large (Claude has token limits)
+                    max_content_length = 50000  # characters
+                    if len(file_content) > max_content_length:
+                        file_content = (
+                            file_content[:max_content_length]
+                            + f"\n\n[Content truncated... showing first {max_content_length} characters of {len(file_content)} total]"
+                        )
+
+                # Initialize Anthropic client
+                api_key = os.getenv("ANTHROPIC_API_KEY")
+                if not api_key:
+                    return "Error: Anthropic API key not found"
+
+                client = anthropic.Anthropic(api_key=api_key)
+
+                # Create the message content based on file type
+                if is_image:
+                    # For images, create a message with image content
+                    messages_content = [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": base64_image,
+                            },
+                        },
+                        {
+                            "type": "text",
+                            "text": f"File: {file_path}\n\nQuery: {query}",
+                        },
+                    ]
+                    system_prompt = "You are an expert analyzer with deep knowledge of images, visual content, and image analysis. You can analyze photographs, diagrams, charts, artwork, and any visual content. Provide thorough, insightful analysis based on the user's query about the provided image. Be specific about visual elements, composition, content, and any relevant details you observe."
+                else:
+                    # For text/other files, use text-only message
+                    messages_content = f"""File: {file_path}
+
+Content:
+{file_content}
+
+Query: {query}"""
+                    system_prompt = "You are an expert analyzer with deep knowledge across all domains including code, data, documents, and various file formats. Provide thorough, insightful analysis based on the user's query about the provided file content. Be specific, accurate, and helpful in your analysis."
+
+                # Call Claude 3.5 for analysis
+                try:
+                    message = client.messages.create(
+                        model="claude-3-5-sonnet-20241022",
+                        max_tokens=4096,
+                        temperature=0.2,
+                        system=system_prompt,
+                        messages=[{"role": "user", "content": messages_content}],
+                    )
+
+                    # Extract text from the message content
+                    content = message.content
+                    if isinstance(content, list) and len(content) > 0:
+                        # Access the first content block
+                        content_block = content[0]
+                        # Convert to string (will work for text content blocks)
+                        analysis_text = (
+                            str(content_block.text)
+                            if hasattr(content_block, "text")
+                            else str(content_block)
+                        )
+                    else:
+                        analysis_text = str(content)
+
+                    return f"📊 Analysis of {file_path}:\n\n{analysis_text}"
+
+                except Exception as api_error:
+                    # Try fallback models if the main one fails
+                    fallback_models = [
+                        "claude-3-5-sonnet-20240620",
+                        "claude-3-sonnet-20240229",
+                    ]
+
+                    for fallback_model in fallback_models:
+                        try:
+                            message = client.messages.create(
+                                model=fallback_model,
+                                max_tokens=4096,
+                                temperature=0.2,
+                                system="You are an expert analyzer with deep knowledge across all domains. Provide thorough analysis based on the user's query about the provided file content.",
+                                messages=[
+                                    {"role": "user", "content": messages_content}
+                                ],
+                            )
+                            # Extract text from the message content
+                            if hasattr(message.content[0], "text"):
+                                analysis_text = message.content[0].text
+                            else:
+                                analysis_text = str(message.content[0])
+
+                            return f"📊 Analysis of {file_path} (using {fallback_model}):\n\n{analysis_text}"
+                        except:
+                            continue
+
+                    return f"Error calling Claude API: {str(api_error)}"
+
+            except Exception as e:
+                return f"Error during analysis: {str(e)}"
+
         return [
             search,
             download,
+            analyze,
         ]
 
     def research_mission(self, topic: str, num_images: int = 5) -> str:
@@ -576,6 +776,19 @@ def main():
                 print("   - Download from URL: 'Download https://example.com'")
                 print("   - Download images: 'Download images'")
                 print("   - Download with topic: 'Download zebra_photos'")
+            elif tool_name == "analyze":
+                print(
+                    "   - Analyze file: 'Analyze downloads/data.json and tell me what patterns you see'"
+                )
+                print(
+                    "   - Analyze code: 'Analyze agent.py and explain how the tools work'"
+                )
+                print(
+                    "   - Analyze images: 'Analyze downloads/zebra_photo.jpg and describe what you see'"
+                )
+                print(
+                    "   - Analyze charts: 'Analyze downloads/chart.png and explain the trends'"
+                )
 
         print("   - Research mission: 'Conduct a research mission on zebras'")
 
