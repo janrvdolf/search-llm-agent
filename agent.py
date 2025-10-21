@@ -13,17 +13,10 @@ from datetime import datetime
 import anthropic
 import base64
 
-try:
-    # Core LangChain imports
-    from langchain.tools import tool
-    from langchain.agents import AgentExecutor, create_react_agent
-    from langchain.prompts import PromptTemplate
-    from langchain_anthropic import ChatAnthropic
-
-    LANGCHAIN_AVAILABLE = True
-except ImportError as e:
-    print(f"⚠️ LangChain not fully available: {e}")
-    LANGCHAIN_AVAILABLE = False
+from langchain.tools import tool
+from langchain.agents import AgentExecutor, create_react_agent
+from langchain.prompts import PromptTemplate
+from langchain_anthropic import ChatAnthropic
 
 # Import our search tools
 from searxng_client import SearXNGClient, print_image_urls, download_images
