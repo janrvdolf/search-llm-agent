@@ -218,16 +218,7 @@ The agent includes robust error handling:
 - **No external dependencies**: Runs entirely on your infrastructure
 - **API key security**: Keys stored in environment variables
 
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit issues or pull requests.
-
 ## 📄 License
 
-[Specify your license here]
+BSD license.
 
-## 🙏 Acknowledgments
-
-- [LangChain](https://www.langchain.com/) for the agent framework
-- [Anthropic](https://www.anthropic.com/) for Claude AI models
-- [SearXNG](https://github.com/searxng/searxng) for privacy-respecting search 
